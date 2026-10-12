@@ -23,7 +23,7 @@ static_assert(is_power_of_two(kAppWindowSize), "");
 
 // Sweep paramaters
 static constexpr size_t kAppNumServers = 32;
-static constexpr size_t kAppNumClients = 512;  // Total client QPs in cluster
+static constexpr size_t kAppNumClients = 4;  // Total client QPs in cluster
 static constexpr size_t kAppNumClientMachines = 1;
 static constexpr size_t kAppUnsigBatch = 1;
 
@@ -266,20 +266,24 @@ void run_client(thread_params_t* params) {
   conn_config.xrc_create_send_qp = FLAGS_use_xrc == 0;
   conn_config.xrc_create_recv_qp = xrc_target_owner;
   conn_config.prealloc_buf = nullptr;
-  conn_config.buf_size = kAppBufSize;
+  // XRC receive QPs live in the owner's PD. All logical client buffers must
+  // therefore be slices of the owner's MR, rather than separate MRs in the
+  // other worker PDs.
+  conn_config.buf_size = FLAGS_use_xrc == 1
+                             ? (xrc_target_owner ? num_threads * kAppBufSize : 0)
+                             : kAppBufSize;
   conn_config.buf_shm_key = shm_key;
 
   auto* cb =
       hrd_ctrl_blk_init(clt_gid, ib_port_index, 1, &conn_config, nullptr);
 
-  // Set to some non-zero value so the server can detect READ completion
-  memset(const_cast<uint8_t*>(cb->conn_buf), 1, kAppBufSize);
+  // Set the XRC owner's complete shared MR to non-zero so READ mode can
+  // observe completion on any logical receiver slice.
+  if (cb->conn_buf != nullptr) {
+    memset(const_cast<uint8_t*>(cb->conn_buf), 1, conn_config.buf_size);
+  }
 
   if (FLAGS_use_xrc == 1) {
-    char buf_name[kHrdQPNameSize];
-    sprintf(buf_name, "client-buf-%zu", clt_gid);
-    hrd_publish_conn_buf(cb, buf_name);
-
     if (xrc_target_owner) {
       // An XRC target is connection-specific. There are only
       // kAppNumServers * xrc_qps_per_thread of them, independent of the
@@ -306,6 +310,26 @@ void run_client(thread_params_t* params) {
         }
       }
     }
+
+    // All local client workers publish a unique offset within the same MR
+    // owned by this machine's XRC target. This is required because remote
+    // access through an XRC target is checked against that target's PD.
+    const size_t qps_per_machine =
+        FLAGS_xrc_qps_per_thread / kAppNumClientMachines;
+    char owner_name[kHrdQPNameSize];
+    sprintf(owner_name, "xrc-target-machine-%zu-server-%zu-%zu",
+            FLAGS_machine_id, static_cast<size_t>(0),
+            FLAGS_machine_id * qps_per_machine);
+    hrd_qp_attr_t* owner_attr = nullptr;
+    while (owner_attr == nullptr) {
+      owner_attr = hrd_get_published_qp(owner_name);
+      if (owner_attr == nullptr) usleep(20000);
+    }
+    char buf_name[kHrdQPNameSize];
+    sprintf(buf_name, "client-buf-%zu", clt_gid);
+    hrd_publish_conn_buf_slice(owner_attr, buf_name,
+                               (clt_gid % num_threads) * kAppBufSize,
+                               kAppBufSize);
   } else {
     // Keep the original RC topology unchanged.
     for (size_t i = 0; i < kAppNumServers; i++) {
@@ -343,7 +367,9 @@ void run_client(thread_params_t* params) {
   clock_gettime(CLOCK_REALTIME, &run_start);
 
   while (true) {
-    printf("main: Client %zu: %d\n", clt_gid, cb->conn_buf[0]);
+    if (cb->conn_buf != nullptr) {
+      printf("main: Client %zu: %d\n", clt_gid, cb->conn_buf[0]);
+    }
 
     clock_gettime(CLOCK_REALTIME, &run_end);
     double run_seconds = (run_end.tv_sec - run_start.tv_sec) +

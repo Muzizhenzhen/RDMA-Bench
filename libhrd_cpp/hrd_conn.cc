@@ -745,6 +745,23 @@ void hrd_publish_conn_buf(hrd_ctrl_blk_t* cb, const char* name) {
   hrd_publish(qp_attr.name, &qp_attr, sizeof(qp_attr));
 }
 
+void hrd_publish_conn_buf_slice(const hrd_qp_attr_t* owner_attr,
+                                const char* name, size_t offset,
+                                size_t size) {
+  assert(owner_attr != nullptr);
+  assert(strlen(name) < kHrdQPNameSize - 1);
+  assert(offset <= owner_attr->buf_size && size <= owner_attr->buf_size - offset);
+
+  hrd_qp_attr_t qp_attr = *owner_attr;
+  strcpy(qp_attr.name, name);
+  qp_attr.qpn = 0;
+  qp_attr.xrc_send_qpn = 0;
+  qp_attr.xrc_srqn = 0;
+  qp_attr.buf_addr += offset;
+  qp_attr.buf_size = size;
+  hrd_publish(qp_attr.name, &qp_attr, sizeof(qp_attr));
+}
+
 void hrd_publish_dgram_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name) {
   assert(n < cb->num_dgram_qps);
   assert(strlen(qp_name) < kHrdQPNameSize - 1);

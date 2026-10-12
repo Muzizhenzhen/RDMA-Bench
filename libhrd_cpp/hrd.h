@@ -262,6 +262,13 @@ void hrd_publish_xrc_send_qp(hrd_ctrl_blk_t* cb, size_t n,
 // node needs to expose the shared XRC receive endpoint.
 void hrd_publish_conn_buf(hrd_ctrl_blk_t* cb, const char* name);
 
+// Publish a logical buffer whose storage is a slice of an already-published
+// MR. This lets XRC receiver workers share the target QP's PD and MR while
+// retaining one distinct address range per worker.
+void hrd_publish_conn_buf_slice(const hrd_qp_attr_t* owner_attr,
+                                const char* name, size_t offset,
+                                size_t size);
+
 // Publish the nth datagram queue pair from this cb with this name
 void hrd_publish_dgram_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name);
 
