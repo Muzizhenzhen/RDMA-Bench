@@ -2,6 +2,22 @@
 This benchmark measures the affect of the number of queue pairs on sender
 throughput. Each server thread connects to many clients.
 
+## Running RC and XRC
+
+The default transport is RC. Pass `xrc` to both launch scripts to select XRC:
+
+```
+./run-servers.sh xrc
+./run-machine.sh <machine_id> xrc
+```
+
+`gdb` can be combined with either script (for example,
+`./run-servers.sh xrc gdb`). XRC is not compatible with `--use_uc 1`.
+
+Each process has a local thread-start barrier after connection setup. The
+reported throughput is payload throughput in Gbps (`ops/s * --size * 8 / 1e9`)
+and retains ops/s in parentheses for diagnostics.
+
 ## Connection logic
 This benchmark is for a single NIC. If `dual_port == 1`,
 each thread (client or server) uses port `id % 2`. In this case, server threads
