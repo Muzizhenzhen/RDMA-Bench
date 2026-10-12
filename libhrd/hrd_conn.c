@@ -440,7 +440,7 @@ void hrd_connect_qp(struct hrd_ctrl_blk* cb, int n,
   struct ibv_qp_attr conn_attr;
   memset(&conn_attr, 0, sizeof(struct ibv_qp_attr));
   conn_attr.qp_state = IBV_QPS_RTR;
-  conn_attr.path_mtu = IBV_MTU_4096;
+  conn_attr.path_mtu = IBV_MTU_1024;
   conn_attr.dest_qp_num = remote_qp_attr->qpn;
   conn_attr.rq_psn = HRD_DEFAULT_PSN;
 
@@ -490,7 +490,7 @@ void hrd_connect_qp(struct hrd_ctrl_blk* cb, int n,
   struct ibv_exp_qp_attr conn_attr;
   memset(&conn_attr, 0, sizeof(struct ibv_exp_qp_attr));
   conn_attr.qp_state = IBV_QPS_RTR;
-  conn_attr.path_mtu = IBV_MTU_4096;
+  conn_attr.path_mtu = IBV_MTU_1024;
   conn_attr.dest_qp_num = remote_qp_attr->qpn;
   conn_attr.rq_psn = HRD_DEFAULT_PSN;
 

@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <infiniband/verbs.h>
 #include <libmemcached/memcached.h>
 #include <malloc.h>
@@ -82,6 +83,11 @@ struct hrd_qp_attr_t {
   char name[kHrdQPNameSize];
   uint16_t lid;
   uint32_t qpn;
+  // XRC-specific endpoint information. qpn is the XRC receive QP number;
+  // xrc_send_qpn is needed to transition a local XRC receive QP, and
+  // xrc_srqn is supplied in each XRC send work request.
+  uint32_t xrc_send_qpn;
+  uint32_t xrc_srqn;
   union ibv_gid gid;  ///< GID, used for only RoCE
 
   // Info about the RDMA buffer associated with this QP
@@ -94,6 +100,11 @@ struct hrd_conn_config_t {
   // Required params
   size_t num_qps = 0;  // num_qps > 0 is used as a validity check
   bool use_uc;
+  bool use_xrc = false;
+  // XRC endpoints are asymmetric. A worker that only sends needs XRC_SEND
+  // QPs, while a node-level target needs just an XRC_RECV QP and SRQ.
+  bool xrc_create_send_qp = true;
+  bool xrc_create_recv_qp = true;
   volatile uint8_t* prealloc_buf;
   size_t buf_size;
   int buf_shm_key;
@@ -105,7 +116,10 @@ struct hrd_conn_config_t {
   std::string to_string() {
     std::ostringstream ret;
     ret << "[num_qps " << std::to_string(num_qps) << ", use_uc "
-        << std::to_string(use_uc) << ", buf size " << std::to_string(buf_size)
+        << std::to_string(use_uc) << ", use_xrc " << std::to_string(use_xrc)
+        << ", xrc_send " << std::to_string(xrc_create_send_qp)
+        << ", xrc_recv " << std::to_string(xrc_create_recv_qp)
+        << ", buf size " << std::to_string(buf_size)
         << ", shm key " << std::to_string(buf_shm_key) << ", sq_depth "
         << std::to_string(sq_depth) << ", max_rd_atomic "
         << std::to_string(max_rd_atomic) << "]";
@@ -143,6 +157,12 @@ struct hrd_ctrl_blk_t {
   hrd_conn_config_t conn_config;
   struct ibv_qp** conn_qp;
   struct ibv_cq** conn_cq;
+  // XRC uses conn_qp for XRC_SEND QPs and xrc_recv_qp for XRC_RECV QPs.
+  struct ibv_qp** xrc_recv_qp;
+  struct ibv_xrcd* xrcd;
+  int xrcd_fd;
+  struct ibv_srq* xrc_srq;
+  struct ibv_cq* xrc_srq_cq;
   volatile uint8_t* conn_buf;  // A buffer for RDMA over RC/UC QPs
   struct ibv_mr* conn_buf_mr;
 
@@ -225,6 +245,11 @@ int hrd_get_published(const char* key, void** value);
 
 // Publish the nth connected queue pair from this cb with this name
 void hrd_publish_conn_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name);
+
+// Publish only a connected-memory buffer. This is useful for XRC: all
+// workers expose independently registered memory, but only one worker per
+// node needs to expose the shared XRC receive endpoint.
+void hrd_publish_conn_buf(hrd_ctrl_blk_t* cb, const char* name);
 
 // Publish the nth datagram queue pair from this cb with this name
 void hrd_publish_dgram_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name);
