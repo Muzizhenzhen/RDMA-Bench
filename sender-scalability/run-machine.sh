@@ -18,7 +18,7 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 4 ]; then
   exit 1
 fi
 
-use_xrc=0
+use_xrc=1
 use_gdb=0
 xrc_qps_per_thread=1
 for arg in "${@:2}"; do

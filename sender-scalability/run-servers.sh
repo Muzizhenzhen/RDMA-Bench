@@ -20,7 +20,7 @@ sleep 1
 
 blue "Starting server"
 
-use_xrc=0
+use_xrc=1
 use_gdb=0
 xrc_qps_per_thread=1
 for arg in "$@"; do

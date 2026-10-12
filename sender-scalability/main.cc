@@ -73,21 +73,27 @@ void run_server(thread_params_t* params) {
   memset(const_cast<uint8_t*>(cb->conn_buf), 0, kAppBufSize);
 
   std::vector<hrd_qp_attr_t*> clt_qp(kAppNumClients, nullptr);
-  std::vector<hrd_qp_attr_t*> xrc_target(kAppNumClientMachines, nullptr);
+  std::vector<hrd_qp_attr_t*> xrc_target(conn_config.num_qps, nullptr);
   if (FLAGS_use_xrc == 1) {
-    const size_t qps_per_machine =
-        FLAGS_xrc_qps_per_thread / kAppNumClientMachines;
-    for (size_t machine = 0; machine < kAppNumClientMachines; machine++) {
+    // Publish every source QP first. The receiver creates one XRC_RECV QP
+    // per source QP and transitions it to RTR/RTS against this endpoint.
+    for (size_t qp = 0; qp < conn_config.num_qps; qp++) {
+      char send_name[kHrdQPNameSize];
+      sprintf(send_name, "xrc-send-server-%zu-%zu", srv_gid, qp);
+      hrd_publish_xrc_send_qp(cb, qp, send_name);
+    }
+
+    for (size_t qp = 0; qp < conn_config.num_qps; qp++) {
       char target_name[kHrdQPNameSize];
-      sprintf(target_name, "xrc-target-machine-%zu", machine);
-      while (xrc_target[machine] == nullptr) {
-        xrc_target[machine] = hrd_get_published_qp(target_name);
-        if (xrc_target[machine] == nullptr) usleep(20000);
+      const size_t qps_per_machine =
+          FLAGS_xrc_qps_per_thread / kAppNumClientMachines;
+      sprintf(target_name, "xrc-target-machine-%zu-server-%zu-%zu",
+              qp / qps_per_machine, srv_gid, qp);
+      while (xrc_target[qp] == nullptr) {
+        xrc_target[qp] = hrd_get_published_qp(target_name);
+        if (xrc_target[qp] == nullptr) usleep(20000);
       }
-      for (size_t qp = 0; qp < qps_per_machine; qp++) {
-        hrd_connect_qp(cb, machine * qps_per_machine + qp,
-                       xrc_target[machine]);
-      }
+      hrd_connect_qp(cb, qp, xrc_target[qp]);
     }
 
     for (size_t i = 0; i < kAppNumClients; i++) {
@@ -228,9 +234,7 @@ void run_server(thread_params_t* params) {
     wr.wr.rdma.remote_addr = clt_qp[cn]->buf_addr + remote_offset;
     wr.wr.rdma.rkey = clt_qp[cn]->rkey;
     if (FLAGS_use_xrc == 1) {
-      constexpr size_t clients_per_machine =
-          kAppNumClients / kAppNumClientMachines;
-      wr.qp_type.xrc.remote_srqn = xrc_target[cn / clients_per_machine]->xrc_srqn;
+      wr.qp_type.xrc.remote_srqn = xrc_target[qp_i]->xrc_srqn;
     }
 
     nb_tx[qp_i]++;
@@ -250,8 +254,13 @@ void run_client(thread_params_t* params) {
   const bool xrc_target_owner = FLAGS_use_xrc == 1 && clt_gid % num_threads == 0;
 
   hrd_conn_config_t conn_config;
-  conn_config.num_qps = FLAGS_use_xrc == 1 ? (xrc_target_owner ? 1 : 0)
-                                            : kAppNumServers;
+  conn_config.num_qps = FLAGS_use_xrc == 1
+                            ? (xrc_target_owner
+                                   ? kAppNumServers *
+                                         (FLAGS_xrc_qps_per_thread /
+                                          kAppNumClientMachines)
+                                   : 0)
+                            : kAppNumServers;
   conn_config.use_uc = (FLAGS_use_uc == 1);
   conn_config.use_xrc = (FLAGS_use_xrc == 1);
   conn_config.xrc_create_send_qp = FLAGS_use_xrc == 0;
@@ -272,9 +281,30 @@ void run_client(thread_params_t* params) {
     hrd_publish_conn_buf(cb, buf_name);
 
     if (xrc_target_owner) {
-      char target_name[kHrdQPNameSize];
-      sprintf(target_name, "xrc-target-machine-%zu", FLAGS_machine_id);
-      hrd_publish_conn_qp(cb, 0, target_name);
+      // An XRC target is connection-specific. There are only
+      // kAppNumServers * xrc_qps_per_thread of them, independent of the
+      // number of receiver workers/buffers.
+      const size_t qps_per_machine =
+          FLAGS_xrc_qps_per_thread / kAppNumClientMachines;
+      for (size_t server = 0; server < kAppNumServers; server++) {
+        for (size_t qp = 0; qp < qps_per_machine; qp++) {
+          const size_t send_qp_i = FLAGS_machine_id * qps_per_machine + qp;
+          const size_t recv_qp_i = server * qps_per_machine + qp;
+          char send_name[kHrdQPNameSize];
+          sprintf(send_name, "xrc-send-server-%zu-%zu", server, send_qp_i);
+          hrd_qp_attr_t* remote_send = nullptr;
+          while (remote_send == nullptr) {
+            remote_send = hrd_get_published_qp(send_name);
+            if (remote_send == nullptr) usleep(20000);
+          }
+          hrd_connect_xrc_recv_qp(cb, recv_qp_i, remote_send);
+
+          char target_name[kHrdQPNameSize];
+          sprintf(target_name, "xrc-target-machine-%zu-server-%zu-%zu",
+                  FLAGS_machine_id, server, send_qp_i);
+          hrd_publish_conn_qp(cb, recv_qp_i, target_name);
+        }
+      }
     }
   } else {
     // Keep the original RC topology unchanged.

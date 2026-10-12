@@ -645,6 +645,49 @@ void hrd_connect_qp(hrd_ctrl_blk_t* cb, size_t n,
   return;
 }
 
+void hrd_connect_xrc_recv_qp(hrd_ctrl_blk_t* cb, size_t n,
+                             hrd_qp_attr_t* remote_qp_attr) {
+  assert(cb->conn_config.use_xrc);
+  assert(cb->xrc_recv_qp != nullptr && n < cb->conn_config.num_qps);
+  assert(cb->xrc_recv_qp[n] != nullptr);
+
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTR;
+  attr.path_mtu = IBV_MTU_1024;
+  attr.dest_qp_num = remote_qp_attr->xrc_send_qpn;
+  attr.rq_psn = kHrdDefaultPSN;
+  attr.ah_attr.is_global = kRoCE ? 1 : 0;
+  attr.ah_attr.dlid = kRoCE ? 0 : remote_qp_attr->lid;
+  attr.ah_attr.sl = 0;
+  attr.ah_attr.port_num = cb->resolve.dev_port_id;
+  if (kRoCE) {
+    attr.ah_attr.grh.dgid = remote_qp_attr->gid;
+    attr.ah_attr.grh.sgid_index = 0;
+    attr.ah_attr.grh.hop_limit = 1;
+  }
+  attr.max_dest_rd_atomic = cb->conn_config.max_rd_atomic;
+  attr.min_rnr_timer = 12;
+  const int rtr_flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
+                        IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+                        IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+  rt_assert(ibv_modify_qp(cb->xrc_recv_qp[n], &attr, rtr_flags) == 0,
+            "Failed to modify XRC receive QP to RTR");
+
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RTS;
+  attr.sq_psn = kHrdDefaultPSN;
+  attr.timeout = 14;
+  attr.retry_cnt = 7;
+  attr.rnr_retry = 7;
+  attr.max_rd_atomic = cb->conn_config.max_rd_atomic;
+  const int rts_flags = IBV_QP_STATE | IBV_QP_SQ_PSN | IBV_QP_TIMEOUT |
+                        IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
+                        IBV_QP_MAX_QP_RD_ATOMIC;
+  rt_assert(ibv_modify_qp(cb->xrc_recv_qp[n], &attr, rts_flags) == 0,
+            "Failed to modify XRC receive QP to RTS");
+}
+
 void hrd_publish_conn_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name) {
   assert(n < cb->conn_config.num_qps);
   assert(strlen(qp_name) < kHrdQPNameSize - 1);
@@ -671,6 +714,20 @@ void hrd_publish_conn_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name) {
   qp_attr.rkey = cb->conn_buf_mr->rkey;
 
   hrd_publish(qp_attr.name, &qp_attr, sizeof(hrd_qp_attr_t));
+}
+
+void hrd_publish_xrc_send_qp(hrd_ctrl_blk_t* cb, size_t n,
+                             const char* qp_name) {
+  assert(cb->conn_config.use_xrc && cb->conn_qp != nullptr);
+  assert(n < cb->conn_config.num_qps && cb->conn_qp[n] != nullptr);
+  assert(strlen(qp_name) < kHrdQPNameSize - 1);
+
+  hrd_qp_attr_t qp_attr = {};
+  strcpy(qp_attr.name, qp_name);
+  qp_attr.lid = cb->resolve.port_lid;
+  qp_attr.xrc_send_qpn = cb->conn_qp[n]->qp_num;
+  if (kRoCE) qp_attr.gid = cb->resolve.gid;
+  hrd_publish(qp_attr.name, &qp_attr, sizeof(qp_attr));
 }
 
 void hrd_publish_conn_buf(hrd_ctrl_blk_t* cb, const char* name) {

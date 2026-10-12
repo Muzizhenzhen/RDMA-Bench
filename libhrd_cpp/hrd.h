@@ -196,6 +196,12 @@ void hrd_create_dgram_qps(hrd_ctrl_blk_t* cb);
 void hrd_connect_qp(hrd_ctrl_blk_t* cb, size_t conn_qp_idx,
                     hrd_qp_attr_t* remote_qp_attr);
 
+// Transition an XRC_RECV QP to the peer's XRC_SEND QP. An XRC receive target
+// is still connection-specific; it is shared across local receiver workers,
+// not across distinct remote send QPs.
+void hrd_connect_xrc_recv_qp(hrd_ctrl_blk_t* cb, size_t recv_qp_idx,
+                             hrd_qp_attr_t* remote_qp_attr);
+
 // Post 1 RECV for this queue pair for this buffer. Low performance.
 void hrd_post_dgram_recv(struct ibv_qp* qp, void* buf_addr, size_t len,
                          uint32_t lkey);
@@ -245,6 +251,11 @@ int hrd_get_published(const char* key, void** value);
 
 // Publish the nth connected queue pair from this cb with this name
 void hrd_publish_conn_qp(hrd_ctrl_blk_t* cb, size_t n, const char* qp_name);
+
+// Publish an XRC_SEND endpoint so its remote XRC_RECV target can be brought
+// to RTR/RTS before the sender starts transmitting.
+void hrd_publish_xrc_send_qp(hrd_ctrl_blk_t* cb, size_t n,
+                             const char* qp_name);
 
 // Publish only a connected-memory buffer. This is useful for XRC: all
 // workers expose independently registered memory, but only one worker per
